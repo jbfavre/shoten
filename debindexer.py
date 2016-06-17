@@ -38,14 +38,21 @@ def index_debian_repo():
     cache = apt_pkg.Cache()
 
     # Register packages
+    package_nb=0
     for package in sorted(cache.packages, key=lambda package: package.name):
+        if package_nb>100:
+            sys.exit(0)
+        package_nb=package_nb+1
         for version in package.version_list:
             statement = """
                 MERGE (p:Package {name:{name}})
-                MERGE (v:Version {version:{version}})
+                MERGE (v:Version {id:{version_id}, package:{name}, version:{version}})
                 MERGE (p)-[:HAS_VERSION]->(v)
             """
-            neo4jGraph.run(statement, name=package.name, version=version.ver_str)
+            neo4jGraph.run(statement, name=package.name, \
+                                      version=version.ver_str, \
+                                      version_id=package.name+'_'+version.ver_str \
+            )
             for dependency_level in version.depends_list:
                 dependency_list = version.depends_list[dependency_level]
                 for depend in dependency_list:
@@ -54,11 +61,24 @@ def index_debian_repo():
                         if dependency.parent_ver.ver_str != '':
                             target_version = dependency.parent_ver.ver_str
                         statement = """
+                            MERGE (op:Package {name:{origin_name}})
+                            MERGE (ov:Version {id:{origin_id}, package:{origin_name}, version:{origin_version}})
+                            MERGE (op)-[:HAS_VERSION]->(ov)
                             MERGE (tp:Package {name:{target_name}})
-                            MERGE (tv:Version {version:{target_version}})
-                            MERGE (tp)-[:DEPENDS]->(tv)
+                            MERGE (tv:Version {id:{target_id}, package:{target_name}, version:{target_version}})
+                            MERGE (tp)-[:HAS_VERSION]->(tv)
                         """
-                        neo4jGraph.run(statement, origin_name=package.name, target_name=dependency.target_pkg.name, target_version=target_version, dependency_level=dependency_level)
+                        statement = statement + \
+                                    'MERGE (ov)-[:' + dependency_level +\
+                                    ' {type:{dependency_level},origin:{origin_id}, target:{target_id}}]->(tv)'
+                        neo4jGraph.run(statement, origin_id=dependency.parent_pkg.name+'_'+dependency.parent_ver.ver_str, \
+                                                  origin_name=dependency.parent_pkg.name, \
+                                                  origin_version=dependency.parent_ver.ver_str, \
+                                                  target_id=dependency.target_pkg.name+'_'+target_version, \
+                                                  target_name=dependency.target_pkg.name, \
+                                                  target_version=target_version, \
+                                                  dependency_level=dependency_level \
+                        )
 
 if __name__ == '__main__':
     index_debian_repo()
